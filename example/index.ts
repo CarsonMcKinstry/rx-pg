@@ -9,7 +9,16 @@ const db = new RxPg({
 });
 
 db.get({
-    from: 'users'
-}).subscribe(console.log, null, () => {
+    from: 'posts',
+    select: ['posts.id as post_id', 'users.id as user_id'],
+    join: {
+        source: 'posts',
+        target: 'users',
+        on: {
+            'posted_by': 'id'
+        }
+    },
+    limit: 1001
+}).subscribe(null, null, () => {
     db.close();
 });

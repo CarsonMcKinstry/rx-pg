@@ -8,7 +8,7 @@ export interface WhereInterface {
 }
 
 export interface JoinInterface {
-    type: string,
+    type?: string,
     source: string;
     target: string;
     on: {
@@ -18,10 +18,10 @@ export interface JoinInterface {
 
 export interface GetInterface {
     from: string;
-    select?: string;
-    join?: JoinInterface|JoinInterface[]
-    where?: WhereInterface|WhereInterface[]
-    limit?: 'ALL'|number;
+    select?: string | string[];
+    join: JoinInterface | JoinInterface[];
+    where?: WhereInterface|WhereInterface[];
+    limit?: number;
     offset?: 0|number;
     step?: number;
 }
