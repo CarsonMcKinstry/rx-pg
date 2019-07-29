@@ -65,7 +65,14 @@ export default class RxPg {
 
         const stepCount$ =
             limit && limit > step
-                ? of(Math.ceil(limit / step)).pipe(tap(console.log))
+                ? client$.pipe(
+                    switchMap(async client => {
+                        await client.release();
+
+                        return of(Math.ceil(limit / step));
+                    }),
+                    switchMap(o => o)
+                )
                 : client$.pipe(
                       switchMap(async client => {
                           const q = await client.query(

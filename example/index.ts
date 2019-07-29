@@ -1,4 +1,5 @@
 import RxPg from '../src/RxPg';
+import { reduce } from 'rxjs/operators';
 
 const db = new RxPg({
     host: 'localhost',
@@ -19,6 +20,8 @@ db.get({
         }
     },
     limit: 1001
-}).subscribe(null, null, () => {
+}).pipe(
+    reduce((o) => o + 1, 0)
+).subscribe(console.log, null, () => {
     db.close();
 });
