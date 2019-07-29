@@ -10,7 +10,9 @@
     "@types/pg": "^7.4.14",
     "nodemon": "^1.19.1",
     "prettier": "^1.18.2",
-    "ts-node": "^8.3.0"
+    "rxjs": "^6.5.2",
+    "ts-node": "^8.3.0",
+    "typescript": "^3.5.3"
   },
   "dependencies": {
     "pg": "^7.12.0"
