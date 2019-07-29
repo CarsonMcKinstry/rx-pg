@@ -7,6 +7,7 @@ import {
     concatMap,
     tap,
     bufferCount,
+    withLatestFrom,
 } from 'rxjs/operators';
 import { GetInterface } from './_types';
 import { Pool, PoolConfig, QueryArrayResult } from 'pg';
@@ -65,14 +66,7 @@ export default class RxPg {
 
         const stepCount$ =
             limit && limit > step
-                ? client$.pipe(
-                    switchMap(async client => {
-                        await client.release();
-
-                        return of(Math.ceil(limit / step));
-                    }),
-                    switchMap(o => o)
-                )
+                ? of(Math.ceil(limit / step))
                 : client$.pipe(
                       switchMap(async client => {
                           const q = await client.query(
@@ -92,9 +86,11 @@ export default class RxPg {
 
         const query$ = stepCount$.pipe(
             switchMap(queryCount => rxFrom([...Array(queryCount)])),
-            concatMap(async (_, n) => {
+            withLatestFrom(stepCount$),
+            concatMap(async ([_, stepCount], n) => {
                 const client = await this._pool.connect();
-                // const calculatedStep =  - step;
+                const calculatedStep =
+                    limit && limit > step ? limit % step : step;
                 // figure out how to calculate a step amount...
                 const calculatedOffset = (offset ? offset : 0) + n * step;
 
@@ -102,7 +98,7 @@ export default class RxPg {
                     SELECT ${select ? select : '*'} FROM ${from} 
                         ${joinStatement}
                         ${whereStatement}
-                    LIMIT ${step}
+                    LIMIT ${n + 1 === stepCount ? calculatedStep : step}
                     OFFSET ${calculatedOffset};
                 `;
 

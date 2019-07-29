@@ -5,8 +5,8 @@ const db = new RxPg({
     host: 'localhost',
     port: 5432,
     user: 'postgres',
-    password: 'docker',
-    database: 'playground',
+    password: 'postgres',
+    database: 'postgres',
 });
 
 db.get({
@@ -16,12 +16,13 @@ db.get({
         source: 'posts',
         target: 'users',
         on: {
-            'posted_by': 'id'
-        }
+            posted_by: 'id',
+        },
     },
-    limit: 1001
-}).pipe(
-    reduce((o) => o + 1, 0)
-).subscribe(console.log, null, () => {
-    db.close();
-});
+    limit: 1001,
+})
+    .pipe(reduce(o => o + 1, 0))
+    .subscribe(console.log, null, async () => {
+        console.log('closing');
+        await db.close();
+    });
