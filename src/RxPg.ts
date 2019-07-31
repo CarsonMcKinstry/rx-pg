@@ -1,33 +1,68 @@
-import { Observable, from as rxFrom, empty, of } from 'rxjs';
+import { Observable, from as rxFrom, of } from 'rxjs';
 import {
     switchMap,
     pluck,
     map,
     share,
     concatMap,
-    tap,
-    bufferCount,
     withLatestFrom,
+    mapTo,
 } from 'rxjs/operators';
 import { GetInterface } from './_types';
-import { Pool, PoolConfig, QueryArrayResult } from 'pg';
+import { Pool, PoolConfig, QueryArrayResult, PoolClient } from 'pg';
 import { processWhere, processJoins } from './utils';
+import Transaction from './Transaction';
 
 export default class RxPg {
-    protected _pool: Pool;
+    private _pool: Pool;
+    private _transaction?: Transaction
+
     constructor(readonly poolConfig?: PoolConfig) {
         this._pool = new Pool(poolConfig);
     }
 
-    async close() {
-        return this._pool.end();
+    /**
+     * Close the current database connection
+     */
+    public close(): Observable<any> {
+        return of(this._pool.end());
     }
 
-    get client() {
+    /**
+     * get a client
+     */
+    get client(): Promise<PoolClient> {
         return this._pool.connect();
     }
 
-    get(query: GetInterface): Observable<QueryArrayResult> {
+    private isTransactionOpen(): Observable<boolean> {
+        if (this._transaction) {
+            return of(this._transaction._open);
+        }
+
+        return of(false);
+    }
+
+    public transaction(): Observable<this> {
+        return this.isTransactionOpen()
+            .pipe(
+                switchMap(open => {
+                    if (open) {
+                        throw new Error('transaction is already open, please call one of the other methods');
+                    }
+
+                    return rxFrom(this._pool.connect())
+                }),
+                switchMap(client => {
+                    this._transaction = new Transaction(client);
+
+                    return this._transaction.open();
+                }),
+                mapTo(this)
+            )
+    }
+
+    public get(query: GetInterface): Observable<QueryArrayResult> {
         const {
             where,
             select = '*',
@@ -43,7 +78,9 @@ export default class RxPg {
         );
         const joinStatement = processJoins(join);
 
-        const client$ = rxFrom(this._pool.connect());
+        const client$: Observable<PoolClient> = this.isTransactionOpen().pipe(
+            switchMap((open) => open ? of(this._transaction!.client) : rxFrom(this._pool.connect()))
+        );
 
         if (limit && limit < step) {
             return client$.pipe(
@@ -91,7 +128,6 @@ export default class RxPg {
                 const client = await this._pool.connect();
                 const calculatedStep =
                     limit && limit > step ? limit % step : step;
-                // figure out how to calculate a step amount...
                 const calculatedOffset = (offset ? offset : 0) + n * step;
 
                 const query = `
