@@ -1,4 +1,4 @@
-import { Observable, from as rxFrom, of } from 'rxjs';
+import { Observable, from as rxFrom, of, from, timer, concat } from 'rxjs';
 import {
     switchMap,
     pluck,
@@ -7,15 +7,21 @@ import {
     concatMap,
     withLatestFrom,
     mapTo,
+    switchMapTo,
+    scan,
+    filter,
+    takeUntil,
+    merge,
+    ignoreElements,
 } from 'rxjs/operators';
-import { GetInterface } from './_types';
-import { Pool, PoolConfig, QueryArrayResult, PoolClient } from 'pg';
+import { GetInterface, InsertInterface } from './_types';
+import { Pool, PoolConfig, QueryResult, PoolClient } from 'pg';
 import { processWhere, processJoins } from './utils';
 import Transaction from './Transaction';
 
 export default class RxPg {
     private _pool: Pool;
-    private _transaction?: Transaction
+    private _transaction?: Transaction;
 
     constructor(readonly poolConfig?: PoolConfig) {
         this._pool = new Pool(poolConfig);
@@ -24,17 +30,26 @@ export default class RxPg {
     /**
      * Close the current database connection
      */
-    public close(): Observable<any> {
-        return of(this._pool.end());
+    public async close(): Promise<any> {
+        return this._pool.end();
     }
 
     /**
      * get a client
      */
-    get client(): Promise<PoolClient> {
-        return this._pool.connect();
+    get client(): Observable<PoolClient> {
+        return this.isTransactionOpen().pipe(
+            switchMap(open =>
+                open
+                    ? of(this._transaction!.client)
+                    : rxFrom(this._pool.connect())
+            )
+        );
     }
 
+    /**
+     * Determines if there is an active transaction
+     */
     private isTransactionOpen(): Observable<boolean> {
         if (this._transaction) {
             return of(this._transaction._open);
@@ -43,26 +58,34 @@ export default class RxPg {
         return of(false);
     }
 
+    /**
+     * Opens a new transaction and errors if one is already open
+     */
     public transaction(): Observable<this> {
-        return this.isTransactionOpen()
-            .pipe(
-                switchMap(open => {
-                    if (open) {
-                        throw new Error('transaction is already open, please call one of the other methods');
-                    }
+        return this.isTransactionOpen().pipe(
+            switchMap(open => {
+                if (open) {
+                    throw new Error(
+                        'transaction is already open, please call one of the other methods'
+                    );
+                }
 
-                    return rxFrom(this._pool.connect())
-                }),
-                switchMap(client => {
-                    this._transaction = new Transaction(client);
+                return rxFrom(this._pool.connect());
+            }),
+            switchMap(client => {
+                this._transaction = new Transaction(client);
 
-                    return this._transaction.open();
-                }),
-                mapTo(this)
-            )
+                return this._transaction.open();
+            }),
+            mapTo(this)
+        );
     }
 
-    public get(query: GetInterface): Observable<QueryArrayResult> {
+    /**
+     * Perform a select query
+     * @param query an interface represententing the query
+     */
+    public get(query: GetInterface): Observable<QueryResult> {
         const {
             where,
             select = '*',
@@ -78,76 +101,140 @@ export default class RxPg {
         );
         const joinStatement = processJoins(join);
 
-        const client$: Observable<PoolClient> = this.isTransactionOpen().pipe(
-            switchMap((open) => open ? of(this._transaction!.client) : rxFrom(this._pool.connect()))
-        );
-
         if (limit && limit < step) {
-            return client$.pipe(
-                switchMap(async client => {
+            return this.client.pipe(
+                switchMap(client => {
                     const query = `
                         SELECT ${select ? select : '*'} FROM ${from} 
                             ${joinStatement}
                             ${whereStatement}
                         LIMIT ${limit}
-                        OFFSET ${offset};`;
-                    const q = await client.query(query, whereValues);
+                        OFFSET ${offset};
+                    `;
 
-                    await client.release();
-
-                    return q.rows;
-                }),
-                switchMap(o => o)
+                    return rxFrom(client.query(query, whereValues));
+                })
             );
         }
 
         const stepCount$ =
             limit && limit > step
                 ? of(Math.ceil(limit / step))
-                : client$.pipe(
-                      switchMap(async client => {
-                          const q = await client.query(
+                : this.client.pipe(
+                      switchMap(client =>
+                          client.query(
                               `select count(*) from ${query.from} ${whereStatement};`,
                               whereValues
-                          );
-
-                          await client.release();
-
-                          return q;
-                      }),
+                          )
+                      ),
                       pluck('rows'),
                       map(([{ count }]) => parseInt(count, 10)),
                       map(count => Math.ceil(count / step)),
                       share()
                   );
 
+        // const queryInterval$ = stepCount$.pipe(switchMapTo(timer(0)));
+
+        // const numberOfQueriesExecuted$ = queryInterval$.pipe(
+        //     scan(acc => acc + 1, 0)
+        // );
+        // const stopSignal$ = numberOfQueriesExecuted$.pipe(
+        //     withLatestFrom(stepCount$),
+        //     filter(
+        //         ([numberOfQueriesExecuted, stepCount]) =>
+        //             numberOfQueriesExecuted === stepCount + 1
+        //     )
+        // );
+
+        // const query$ = stepCount$.pipe(
+        //     withLatestFrom(stepCount$),
+        //     concatMap(([n, stepCount]) => {
+        //         const client = this.client;
+
+        //         const calculatedStep =
+        //             limit && limit > step ? limit % step : step;
+        //         const calculatedOffset = (offset ? offset : 0) + n * step;
+        //         const queryString = `
+        //             SELECT ${select ? select : '*'} FROM ${from}
+        //                 ${joinStatement}
+        //                 ${whereStatement}
+        //             LIMIT ${n + 1 === stepCount ? calculatedStep : step}
+        //             OFFSET ${calculatedOffset};
+        //         `;
+
+        //         return client.pipe(
+        //             switchMap(async c => {
+        //                 const q = await c.query(queryString, whereValues);
+
+        //                 await c.release();
+
+        //                 return q;
+        //             })
+        //         )
+        //     }),
+        //     takeUntil(stopSignal$)
+        // );
+
+        // return query$;
+
         const query$ = stepCount$.pipe(
             switchMap(queryCount => rxFrom([...Array(queryCount)])),
             withLatestFrom(stepCount$),
-            concatMap(async ([_, stepCount], n) => {
-                const client = await this._pool.connect();
+            concatMap(([_, stepCount], n) => {
                 const calculatedStep =
                     limit && limit > step ? limit % step : step;
                 const calculatedOffset = (offset ? offset : 0) + n * step;
 
                 const query = `
-                    SELECT ${select ? select : '*'} FROM ${from} 
+                    SELECT ${select ? select : '*'} FROM ${from}
                         ${joinStatement}
                         ${whereStatement}
                     LIMIT ${n + 1 === stepCount ? calculatedStep : step}
                     OFFSET ${calculatedOffset};
                 `;
 
-                const results = await client.query(query, whereValues);
-
-                await client.release();
-
-                return results.rows;
+                return this.query(query, whereValues);
             }),
-            switchMap(o => o),
             share()
         );
 
         return query$;
+    }
+
+    public insert(query: InsertInterface): Observable<QueryResult> {
+        const { into, data, returning = '*' } = query;
+
+        const entries = Object.entries(data || {});
+
+        if (!into) {
+            throw new Error('table to insert data into not provided');
+        }
+
+        if (entries.length < 1) {
+            throw new Error('data not provided');
+        }
+
+        const columnNames = entries.map(([column]) => column);
+        const preparedValues = entries.map((_, i) => `$${i + 1}`);
+        const values = entries.map(([, value]) => value);
+
+        const queryString = `
+            INSERT INTO ${into} (${columnNames}) VALUES (${preparedValues})
+            RETURNING ${returning};
+        `;
+
+        return this.query(queryString, values);
+    }
+
+    public query(queryString: string, preparation: any[]) {
+        return this.client.pipe(
+            switchMap(async client => {
+                const r = await client.query(queryString, preparation);
+
+                await client.release();
+
+                return r;
+            })
+        );
     }
 }

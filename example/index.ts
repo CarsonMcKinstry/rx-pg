@@ -1,5 +1,5 @@
 import RxPg from '../src/RxPg';
-import { reduce } from 'rxjs/operators';
+import { reduce, pluck, tap } from 'rxjs/operators';
 
 const db = new RxPg({
     host: 'localhost',
@@ -19,11 +19,25 @@ db.get({
         on: {
             posted_by: 'id',
         },
-    }
+    },
+    limit: 100
 })
-    // .pipe(reduce(o => o + 1, 0))
     .subscribe(console.log, null, async () => {
         console.log('closing');
         await db.close();
         console.timeEnd('streamed pg');
     });
+
+
+// db.insert({
+//     into: 'users',
+//     data: {
+//         name: 'Carson McKinstry',
+//         age: 25
+//     }
+// })
+//     .subscribe(console.log, null, async () => {
+//         console.log('closing');
+//         await db.close();
+//         console.timeEnd('streamed pg');
+//     });

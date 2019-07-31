@@ -25,3 +25,11 @@ export interface GetInterface {
     offset?: 0|number;
     step?: number;
 }
+
+export interface InsertInterface {
+    into: string;
+    returning?: string | string[];
+    data: {
+        [key: string]: any;
+    }
+}
