@@ -1,15 +1,16 @@
 import RxPg from '../src/RxPg';
-import { reduce, pluck, tap } from 'rxjs/operators';
+import { reduce, pluck, tap, map, switchMap, scan } from 'rxjs/operators';
+import { from } from 'rxjs';
 
 const db = new RxPg({
     host: 'localhost',
     port: 5432,
     user: 'postgres',
-    password: 'docker',
-    database: 'playground',
+    password: 'postgres',
+    database: 'postgres',
 });
 
-console.time('streamed pg')
+console.time('streamed pg');
 db.get({
     from: 'posts',
     select: ['posts.id as post_id', 'users.id as user_id'],
@@ -20,14 +21,19 @@ db.get({
             posted_by: 'id',
         },
     },
-    limit: 100
+    limit: 50000,
+    step: 5000,
 })
+    .pipe(
+        map(({ rows }) => rows),
+        switchMap(rows => from(rows)),
+        reduce(acc => acc + 1, 0)
+    )
     .subscribe(console.log, null, async () => {
         console.log('closing');
         await db.close();
         console.timeEnd('streamed pg');
     });
-
 
 // db.insert({
 //     into: 'users',

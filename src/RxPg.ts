@@ -7,6 +7,7 @@ import {
     concatMap,
     withLatestFrom,
     mapTo,
+    mergeMap,
     switchMapTo,
     scan,
     filter,
@@ -95,6 +96,7 @@ export default class RxPg {
             step = 1000,
             join,
         } = query;
+
         const { statement: whereStatement, values: whereValues } = processWhere(
             where,
             1
@@ -102,26 +104,21 @@ export default class RxPg {
         const joinStatement = processJoins(join);
 
         if (limit && limit < step) {
-            return this.client.pipe(
-                switchMap(client => {
-                    const query = `
-                        SELECT ${select ? select : '*'} FROM ${from} 
-                            ${joinStatement}
-                            ${whereStatement}
-                        LIMIT ${limit}
-                        OFFSET ${offset};
-                    `;
-
-                    return rxFrom(client.query(query, whereValues));
-                })
-            );
+            const query = `
+            SELECT ${select ? select : '*'} FROM ${from}
+                ${joinStatement}
+                ${whereStatement}
+            LIMIT ${limit}
+            OFFSET ${offset};
+        `;
+            return this.query(query, whereValues);
         }
 
         const stepCount$ =
             limit && limit > step
                 ? of(Math.ceil(limit / step))
                 : this.client.pipe(
-                      switchMap(client =>
+                      mergeMap(client =>
                           client.query(
                               `select count(*) from ${query.from} ${whereStatement};`,
                               whereValues
@@ -133,52 +130,8 @@ export default class RxPg {
                       share()
                   );
 
-        // const queryInterval$ = stepCount$.pipe(switchMapTo(timer(0)));
-
-        // const numberOfQueriesExecuted$ = queryInterval$.pipe(
-        //     scan(acc => acc + 1, 0)
-        // );
-        // const stopSignal$ = numberOfQueriesExecuted$.pipe(
-        //     withLatestFrom(stepCount$),
-        //     filter(
-        //         ([numberOfQueriesExecuted, stepCount]) =>
-        //             numberOfQueriesExecuted === stepCount + 1
-        //     )
-        // );
-
-        // const query$ = stepCount$.pipe(
-        //     withLatestFrom(stepCount$),
-        //     concatMap(([n, stepCount]) => {
-        //         const client = this.client;
-
-        //         const calculatedStep =
-        //             limit && limit > step ? limit % step : step;
-        //         const calculatedOffset = (offset ? offset : 0) + n * step;
-        //         const queryString = `
-        //             SELECT ${select ? select : '*'} FROM ${from}
-        //                 ${joinStatement}
-        //                 ${whereStatement}
-        //             LIMIT ${n + 1 === stepCount ? calculatedStep : step}
-        //             OFFSET ${calculatedOffset};
-        //         `;
-
-        //         return client.pipe(
-        //             switchMap(async c => {
-        //                 const q = await c.query(queryString, whereValues);
-
-        //                 await c.release();
-
-        //                 return q;
-        //             })
-        //         )
-        //     }),
-        //     takeUntil(stopSignal$)
-        // );
-
-        // return query$;
-
         const query$ = stepCount$.pipe(
-            switchMap(queryCount => rxFrom([...Array(queryCount)])),
+            switchMap(queryCount => rxFrom([...Array(queryCount + 1)])),
             withLatestFrom(stepCount$),
             concatMap(([_, stepCount], n) => {
                 const calculatedStep =
@@ -228,7 +181,7 @@ export default class RxPg {
 
     public query(queryString: string, preparation: any[]) {
         return this.client.pipe(
-            switchMap(async client => {
+            mergeMap(async client => {
                 const r = await client.query(queryString, preparation);
 
                 await client.release();
@@ -238,3 +191,47 @@ export default class RxPg {
         );
     }
 }
+
+// const queryInterval$ = stepCount$.pipe(switchMapTo(timer(0)));
+
+// const numberOfQueriesExecuted$ = queryInterval$.pipe(
+//     scan(acc => acc + 1, 0)
+// );
+// const stopSignal$ = numberOfQueriesExecuted$.pipe(
+//     withLatestFrom(stepCount$),
+//     filter(
+//         ([numberOfQueriesExecuted, stepCount]) =>
+//             numberOfQueriesExecuted === stepCount + 1
+//     )
+// );
+
+// const query$ = stepCount$.pipe(
+//     withLatestFrom(stepCount$),
+//     concatMap(([n, stepCount]) => {
+//         const client = this.client;
+
+//         const calculatedStep =
+//             limit && limit > step ? limit % step : step;
+//         const calculatedOffset = (offset ? offset : 0) + n * step;
+//         const queryString = `
+//             SELECT ${select ? select : '*'} FROM ${from}
+//                 ${joinStatement}
+//                 ${whereStatement}
+//             LIMIT ${n + 1 === stepCount ? calculatedStep : step}
+//             OFFSET ${calculatedOffset};
+//         `;
+
+//         return client.pipe(
+//             switchMap(async c => {
+//                 const q = await c.query(queryString, whereValues);
+
+//                 await c.release();
+
+//                 return q;
+//             })
+//         )
+//     }),
+//     takeUntil(stopSignal$)
+// );
+
+// return query$;
